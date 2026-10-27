@@ -1,0 +1,1 @@
+{ "name": "usage-pace", "version": "0.1.0", "description": "Compares rate-limit usage against time elapsed in each window", "types": "./types/index.d.ts" }

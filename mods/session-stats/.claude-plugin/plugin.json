@@ -1,0 +1,1 @@
+{ "name": "session-stats", "version": "0.1.0", "description": "Pane with this session's tool calls, files edited and tokens", "types": "./types/index.d.ts" }
