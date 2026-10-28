@@ -11,6 +11,7 @@ const PACE = path.join(ROOT, 'usage-pace')
 const HANDOFF = path.join(ROOT, 'handoff')
 const HANDOFF_TIMEOUT = 3 * 60 * 1000
 const STALE = 7 * 24 * 3600 * 1000
+const LIVE = 3 * 60 * 1000
 
 function readAll(dir) {
   let names = []
@@ -34,13 +35,31 @@ function inWorkspace(cwd) {
   return folders.some(f => cwd === f.uri.fsPath || cwd.startsWith(f.uri.fsPath + path.sep))
 }
 
-function snapshot() {
-  const stats = readAll(STATS)
-  const session = stats.find(s => s.cwd && inWorkspace(s.cwd)) ?? stats[0] ?? null
-  const paces = readAll(PACE)
-  const pace = paces.find(p => p.paces.length > 0) ?? paces[0] ?? null
-  return { session, pace, local: localUsage(), handoff: pending ? 'working' : null, now: Date.now() }
+// Every open chat rewrites its snapshot on a timer, so the newest file is not the chat in use.
+function pickSession(stats) {
+  const now = Date.now()
+  const ours = stats.filter(s => s.cwd && inWorkspace(s.cwd))
+  const pool = ours.length > 0 ? ours : stats
+  const live = pool.filter(s => now - s.updatedAt < LIVE)
+  const sessions = (live.length > 0 ? live : pool.slice(0, 1)).sort((a, b) => (b.activeAt ?? 0) - (a.activeAt ?? 0) || b.updatedAt - a.updatedAt)
+  const chosen = picked && sessions.find(s => s.sessionId === picked)
+  return { session: chosen ?? sessions[0] ?? null, sessions }
 }
+
+// Rate limits are account-wide; only the chat that last called the API has current numbers.
+function pickPace(paces) {
+  const read = paces.filter(p => p.paces.length > 0)
+  return read.sort((a, b) => (b.readAt ?? 0) - (a.readAt ?? 0) || b.updatedAt - a.updatedAt)[0] ?? paces[0] ?? null
+}
+
+function snapshot() {
+  const { session, sessions } = pickSession(readAll(STATS))
+  const list = sessions.map(s => ({ sessionId: s.sessionId, title: s.title || s.sessionId.slice(0, 8), activeAt: s.activeAt ?? 0 }))
+  return { session, sessions: list, pace: pickPace(readAll(PACE)), local: localUsage(), handoff: pending ? 'working' : null, now: Date.now() }
+}
+
+let picked = null
+let workspace = null
 
 let pending = null
 let state = null
@@ -49,7 +68,7 @@ const RANK = { ok: 0, soon: 1, swap: 2 }
 const FRESH = 60 * 60 * 1000
 
 function alertSwap(s, provider) {
-  if (!s?.advice || !state || Date.now() - s.updatedAt > FRESH) return
+  if (!s?.advice || !state || !s.cwd || !inWorkspace(s.cwd) || Date.now() - s.updatedAt > FRESH) return
   const key = `alerted:${s.sessionId}`
   const level = s.advice.level
   const last = state.get(key, 'ok')
@@ -95,8 +114,27 @@ async function checkHandoff(provider) {
     return
   }
   await vscode.env.clipboard.writeText(data.text)
-  await vscode.commands.executeCommand('claude-vscode.editor.open', undefined, data.text)
+  await openChat(data.text)
   vscode.window.showInformationMessage(`Handoff ready (${data.method}), also on clipboard. Send it in the new chat.`)
+}
+
+// editor.open only reaches the sidebar when Claude's preferredLocation is "sidebar", so set it for the call.
+async function openChat(text) {
+  const where = vscode.workspace.getConfiguration('claudeStats').get('newChatLocation', 'sidebar')
+  if (where !== 'sidebar') {
+    await vscode.commands.executeCommand('claude-vscode.editor.open', undefined, text)
+    return
+  }
+  const claude = vscode.workspace.getConfiguration('claudeCode')
+  const before = claude.inspect('preferredLocation')?.globalValue
+  if (before !== 'sidebar') await claude.update('preferredLocation', 'sidebar', vscode.ConfigurationTarget.Global)
+  try {
+    await vscode.commands.executeCommand('claude-vscode.editor.open', undefined, text, undefined, undefined, undefined, {
+      programmatic: 'honor-preferred-location',
+    })
+  } finally {
+    if (before !== 'sidebar') await claude.update('preferredLocation', before, vscode.ConfigurationTarget.Global)
+  }
 }
 
 class Provider {
@@ -108,6 +146,11 @@ class Provider {
     view.webview.onDidReceiveMessage(m => {
       if (m === 'ready') this.push()
       else if (m?.type === 'handoff') requestHandoff(m.sessionId, this)
+      else if (m?.type === 'pick') {
+        picked = m.sessionId
+        workspace?.update('picked', picked)
+        this.push()
+      }
     })
     view.onDidChangeVisibility(() => view.visible && this.push())
   }
@@ -143,6 +186,8 @@ function html(nonce, script) {
   button { margin-top: 6px; width: 100%; padding: 4px; border: none; border-radius: 2px; cursor: pointer; color: var(--vscode-button-foreground); background: var(--vscode-button-background); font-family: inherit; }
   button:hover { background: var(--vscode-button-hoverBackground); }
   button:disabled { opacity: .6; cursor: default; }
+  select { width: 100%; margin: 4px 0 2px; padding: 3px; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, transparent); font-family: inherit; }
+  .chat { margin: 4px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .file { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 </style>
 </head>
@@ -158,6 +203,8 @@ function activate(context) {
   fs.mkdirSync(HANDOFF, { recursive: true })
 
   state = context.globalState
+  workspace = context.workspaceState
+  picked = workspace.get('picked', null)
   const provider = new Provider()
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeStats.panel', provider))
 

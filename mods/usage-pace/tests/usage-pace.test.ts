@@ -70,3 +70,39 @@ test('status line tracks the window as time passes', async ($, on) => {
   expect(statuses.at(-1)).toBe('5h 45% used vs 40% time (+5)')
   expect(toasts).toHaveLength(1)
 })
+
+test('snapshot records when the reading came from the API, not when it was rewritten', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const writes: string[] = []
+  on('command.register', () => ({ value: { command: 'usage-pace' } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('fs.write', (_$, e) => (writes.push(e.text), { value: undefined }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { window: 200_000 },
+      rateLimits: [{ kind: 'five_hour', percentUsed: 10, resetsAt: new Date(NOW + 4 * 3_600_000).toISOString() }],
+    },
+  }))
+
+  await $.session.start({ cwd: '/', surface: null, isInteractive: true })
+  expect(JSON.parse(writes.at(-1)!).readAt).toBe(0)
+
+  await clock.advance(5 * 60_000)
+  await $.session.measure({
+    context: { window: 200_000 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 20, resetsAt: new Date(NOW + 4 * 3_600_000).toISOString() }],
+    changed: ['rateLimits'],
+  })
+  const measuredAt = NOW + 5 * 60_000
+  expect(JSON.parse(writes.at(-1)!).readAt).toBe(measuredAt)
+
+  await clock.advance(60 * 60_000)
+  const last = JSON.parse(writes.at(-1)!)
+  expect(last.updatedAt).toBe(measuredAt + 60 * 60_000)
+  expect(last.readAt).toBe(measuredAt)
+})

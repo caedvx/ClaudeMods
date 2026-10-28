@@ -26,6 +26,7 @@ test('advice says swap near auto-compact', async () => {
 test('a handoff prompt switches caveman to ultra', async ($, on) => {
   const writes: [string, string][] = []
   on('fs.exists', () => ({ value: true }))
+  on('clock.now', () => ({ value: 1 }))
   on('fs.write', (_, e) => {
     writes.push([e.path, e.text])
     return { value: undefined }
@@ -39,6 +40,7 @@ test('a handoff prompt switches caveman to ultra', async ($, on) => {
 test('a handoff prompt leaves caveman alone when it is not installed', async ($, on) => {
   const writes: [string, string][] = []
   on('fs.exists', () => ({ value: false }))
+  on('clock.now', () => ({ value: 1 }))
   on('fs.write', (_, e) => {
     writes.push([e.path, e.text])
     return { value: undefined }
@@ -57,6 +59,7 @@ test('/handoff asks haiku and wraps the notes', async ($, on) => {
   })
   on('session.id', () => ({ value: 'abc' }))
   on('session.cwd', () => ({ value: '/home/x/proj' }))
+  on('session.root', () => ({ value: '/home/x/proj' }))
   on('session.messages', () => ({ value: [{ role: 'user', text: 'build the thing', toolUses: [] }] }))
   on('model.complete', (_, e) => {
     expect(e.model).toBe('haiku')
@@ -95,4 +98,20 @@ test('a toast fires once when advice rises to swap', async ($, on) => {
   await measure(185_000, 92)
   expect(toasts).toHaveLength(1)
   expect(toasts[0]).toMatch(/now/)
+})
+
+test('handoff points at the transcript under the project root after a shell cd', async ($, on) => {
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.exists', (_, e) => ({ value: e.path.includes('/projects/-home-x-proj/') }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: '/home/x/proj/sub' }))
+  on('session.root', () => ({ value: '/home/x/proj' }))
+  on('session.messages', () => ({ value: [{ role: 'user', text: 'build the thing', toolUses: [] }] }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'Goal: thing', usage: {} } }) as never)
+  on('ui.copy', () => ({ value: { isCopied: true } }))
+  on('clock.now', () => ({ value: 1 }))
+
+  const { text } = await $.command.run({ command: 'handoff', args: '' } as never)
+  expect(text).toMatch(/-home-x-proj\/abc\.jsonl/)
+  expect(text).not.toMatch(/-home-x-proj-sub/)
 })

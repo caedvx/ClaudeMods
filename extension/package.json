@@ -2,7 +2,7 @@
   "name": "claude-stats",
   "displayName": "Claude Stats",
   "description": "Sidebar view of the session-stats and usage-pace Claude Code mods",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "publisher": "caedvx",
   "license": "UNLICENSED",
   "private": true,
@@ -26,6 +26,24 @@
           "name": "Stats"
         }
       ]
+    },
+    "configuration": {
+      "title": "Claude Stats",
+      "properties": {
+        "claudeStats.newChatLocation": {
+          "type": "string",
+          "enum": [
+            "sidebar",
+            "tab"
+          ],
+          "enumDescriptions": [
+            "Open the handoff chat in the Claude side bar",
+            "Open the handoff chat in a new editor tab"
+          ],
+          "default": "sidebar",
+          "description": "Where \"Hand off to new chat\" opens the new chat."
+        }
+      }
     }
   },
   "extensionDependencies": [

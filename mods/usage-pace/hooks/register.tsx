@@ -13,6 +13,7 @@ const WARN_POINTS = 10
 
 const limits = atom({ plugin: 'usage-pace', key: 'limits' } as const, [])
 const now = atom({ plugin: 'usage-pace', key: 'now' } as const, 0)
+const readAt = atom({ plugin: 'usage-pace', key: 'readAt' } as const, 0)
 
 export type Pace = {
   label: string
@@ -64,10 +65,11 @@ export function statusLine(paces: Pace[]): string | undefined {
 
 const warned = new Set<string>()
 
-async function refresh($: EngineInterface, next?: Limit[]) {
+async function refresh($: EngineInterface, next?: Limit[], fromApi = false) {
   const at = await $.clock.now()
   const current = next ?? (await read($, limits))
   if (next) await update($, limits, () => next)
+  if (fromApi) await update($, readAt, () => at)
   await update($, now, () => at)
 
   const paces = current.map(l => pace(l, at))
@@ -75,7 +77,7 @@ async function refresh($: EngineInterface, next?: Limit[]) {
 
   try {
     const id = await $.session.id()
-    await $.fs.write(`${$.plugin.root}/../../mod-stats/usage-pace/${id}.json`, JSON.stringify({ sessionId: id, updatedAt: at, paces }))
+    await $.fs.write(`${$.plugin.root}/../../mod-stats/usage-pace/${id}.json`, JSON.stringify({ sessionId: id, updatedAt: at, readAt: await read($, readAt), paces }))
   } catch {}
 
   for (const [i, p] of paces.entries()) {
@@ -103,7 +105,7 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) {
-      await refresh($, e.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, resetsAt })))
+      await refresh($, e.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, resetsAt })), true)
     }
 
     return next(e)

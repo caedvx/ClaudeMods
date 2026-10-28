@@ -13,6 +13,8 @@ declare module 'claude-code' {
       window: Window
       handledRequest: number
       alerted: 'ok' | 'soon' | 'swap'
+      title: string
+      activeAt: number
     }
   }
 }

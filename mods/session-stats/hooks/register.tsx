@@ -15,6 +15,8 @@ const context = atom({ plugin: 'session-stats', key: 'context' } as const, null)
 const window = atom({ plugin: 'session-stats', key: 'window' } as const, { tokens: null, base: null, lastTurnAt: null })
 const handledRequest = atom({ plugin: 'session-stats', key: 'handledRequest' } as const, 0)
 const alerted = atom({ plugin: 'session-stats', key: 'alerted' } as const, 'ok')
+const title = atom({ plugin: 'session-stats', key: 'title' } as const, '')
+const activeAt = atom({ plugin: 'session-stats', key: 'activeAt' } as const, 0)
 const RANK = { ok: 0, soon: 1, swap: 2 } as const
 
 const CACHE_TTL = 60 * 60 * 1000
@@ -67,6 +69,25 @@ function hasCaveman($: EngineInterface): Promise<boolean> {
   return $.fs.exists(`${claudeDir($)}/.caveman-active`).catch(() => false)
 }
 
+function titleOf(text: string): string {
+  return clip(text.replace(/<([\w-]+)[^>]*>[\s\S]*?<\/\1>/g, ' ').replace(/\s+/g, ' ').trim(), 80)
+}
+
+async function chatTitle($: EngineInterface): Promise<string> {
+  const known = await read($, title)
+  if (known) return known
+  try {
+    for (const m of await $.session.messages()) {
+      const t = m.role === 'user' ? titleOf(m.text) : ''
+      if (t) {
+        await update($, title, () => t)
+        return t
+      }
+    }
+  } catch {}
+  return ''
+}
+
 async function snapshot($: EngineInterface) {
   try {
     await writeSnapshot($)
@@ -78,6 +99,8 @@ async function writeSnapshot($: EngineInterface) {
   const data = {
     sessionId: id,
     cwd,
+    title: await chatTitle($),
+    activeAt: await read($, activeAt),
     updatedAt: at,
     tools: await read($, tools),
     files: await read($, files),
@@ -147,7 +170,7 @@ const HANDOFF_ASK =
   'At most 600 words. Output only the notes.'
 
 async function buildHandoff($: EngineInterface): Promise<{ text: string; method: string }> {
-  const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
+  const id = await $.session.id()
 
   let notes: string | undefined
   let method = HANDOFF_MODEL
@@ -170,7 +193,7 @@ async function buildHandoff($: EngineInterface): Promise<{ text: string; method:
     notes = r.text.trim()
   }
 
-  const old = `~/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
+  const old = await transcriptPath($, id)
   const caveman = (await hasCaveman($)) ? 'Caveman ultra. ' : ''
   const text = [
     `<handoff from="${id}">`,
@@ -180,6 +203,15 @@ async function buildHandoff($: EngineInterface): Promise<{ text: string; method:
     '</handoff>',
   ].join('\n')
   return { text, method }
+}
+
+async function transcriptPath($: EngineInterface, id: string): Promise<string> {
+  const dirs = [await $.session.root(), await $.session.cwd()]
+  const rel = (dir: string) => `projects/${dir.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
+  for (const dir of dirs) {
+    if (await $.fs.exists(`${claudeDir($)}/${rel(dir)}`).catch(() => false)) return `~/.claude/${rel(dir)}`
+  }
+  return `~/.claude/${rel(dirs[0])}`
 }
 
 async function runHandoff($: EngineInterface): Promise<string | undefined> {
@@ -245,6 +277,12 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    if (!e.command) {
+      const at = await $.clock.now()
+      await update($, activeAt, () => at)
+      const t = titleOf(e.text)
+      if (t && !e.text.includes('<handoff from="')) await update($, title, old => old || t)
+    }
     if (e.command || !e.text.includes('<handoff from="')) return next(e)
     if (!(await hasCaveman($))) return next(e)
     const ultra = () => $.fs.write(`${claudeDir($)}/.caveman-active`, 'ultra').catch(() => {})

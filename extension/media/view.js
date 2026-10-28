@@ -108,11 +108,30 @@ function session(s) {
   return out
 }
 
+function picker(s, sessions, now) {
+  if (!s) return ''
+  if (sessions.length < 2) return `<div class="dim chat" title="${esc(s.sessionId)}">${esc(s.title || s.sessionId.slice(0, 8))}</div>`
+  const opts = sessions
+    .map(c => {
+      const when = c.activeAt ? ago(now - c.activeAt) : 'no prompt yet'
+      return `<option value="${esc(c.sessionId)}"${c.sessionId === s.sessionId ? ' selected' : ''}>${esc(c.title)} · ${when}</option>`
+    })
+    .join('')
+  return `<select id="chat" title="Which chat this panel and its handoff follow">${opts}</select>`
+}
+
 window.addEventListener('message', ({ data }) => {
-  const { session: s, pace, local: l, handoff, now } = data
+  const { session: s, sessions = [], pace, local: l, handoff, now } = data
+  if (document.activeElement?.id === 'chat') return
   const head = s ? `<div class="dim">${esc(s.cwd.split('/').pop())} · ${ago(now - s.updatedAt)}</div>` : ''
   root.className = ''
-  root.innerHTML = (s ? swap(s, handoff, now) : '') + usage(pace, now) + local(l) + '<h2>This workspace</h2>' + head + session(s)
+  root.innerHTML = picker(s, sessions, now) + (s ? swap(s, handoff, now) : '') + usage(pace, now) + local(l) + '<h2>This chat</h2>' + head + session(s)
+})
+
+root.addEventListener('change', e => {
+  if (e.target.id !== 'chat') return
+  e.target.blur()
+  vscode.postMessage({ type: 'pick', sessionId: e.target.value })
 })
 
 root.addEventListener('click', e => {

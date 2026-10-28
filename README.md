@@ -43,6 +43,8 @@ VS Code's Claude panel doesn't draw mod panes, so `extension/` holds a small ext
 
 Finds `code`, `codium` or `cursor`, including the copies inside `/Applications`. Otherwise use Extensions > ... > Install from VSIX and pick `extension/claude-stats.vsix`.
 
+"Hand off to new chat" opens the new chat in the Claude side bar. Set `claudeStats.newChatLocation` to `tab` to get an editor tab instead.
+
 Rebuild after changing it:
 
     cd extension
